@@ -76,6 +76,23 @@ export async function verifySignature(
 const METADATA_MARKER = "IMG_PROVENANCE_V1:";
 const METADATA_END = ":END_PROVENANCE";
 
+// Find byte sequence in a Uint8Array (searches from end)
+function findMarkerBytes(data: Uint8Array, marker: string): number {
+  const encoder = new TextEncoder();
+  const markerBytes = encoder.encode(marker);
+  for (let i = data.length - markerBytes.length; i >= 0; i--) {
+    let found = true;
+    for (let j = 0; j < markerBytes.length; j++) {
+      if (data[i + j] !== markerBytes[j]) {
+        found = false;
+        break;
+      }
+    }
+    if (found) return i;
+  }
+  return -1;
+}
+
 // Embed provenance metadata into image file as a trailing data block
 export function embedMetadata(imageBuffer: ArrayBuffer, metadata: ProvenanceMetadata): ArrayBuffer {
   const metadataStr = METADATA_MARKER + JSON.stringify(metadata) + METADATA_END;
@@ -90,15 +107,20 @@ export function embedMetadata(imageBuffer: ArrayBuffer, metadata: ProvenanceMeta
 
 // Extract provenance metadata from image file
 export function extractMetadata(imageBuffer: ArrayBuffer): ProvenanceMetadata | null {
-  const decoder = new TextDecoder();
-  const str = decoder.decode(imageBuffer);
-  const startIdx = str.lastIndexOf(METADATA_MARKER);
-  if (startIdx === -1) return null;
-  
-  const endIdx = str.indexOf(METADATA_END, startIdx);
+  const data = new Uint8Array(imageBuffer);
+  const markerStart = findMarkerBytes(data, METADATA_MARKER);
+  if (markerStart === -1) return null;
+
+  const endMarkerBytes = new TextEncoder().encode(METADATA_END);
+  const markerBytesLen = new TextEncoder().encode(METADATA_MARKER).length;
+
+  // Decode only the tail portion as text
+  const tailBytes = data.slice(markerStart + markerBytesLen);
+  const tailStr = new TextDecoder().decode(tailBytes);
+  const endIdx = tailStr.indexOf(METADATA_END);
   if (endIdx === -1) return null;
-  
-  const jsonStr = str.substring(startIdx + METADATA_MARKER.length, endIdx);
+
+  const jsonStr = tailStr.substring(0, endIdx);
   try {
     return JSON.parse(jsonStr);
   } catch {
@@ -108,11 +130,10 @@ export function extractMetadata(imageBuffer: ArrayBuffer): ProvenanceMetadata | 
 
 // Get the raw image data (without any appended metadata) for hashing
 export function getImageData(imageBuffer: ArrayBuffer): ArrayBuffer {
-  const decoder = new TextDecoder();
-  const str = decoder.decode(imageBuffer);
-  const markerIdx = str.lastIndexOf(METADATA_MARKER);
-  if (markerIdx === -1) return imageBuffer;
-  return imageBuffer.slice(0, markerIdx);
+  const data = new Uint8Array(imageBuffer);
+  const markerStart = findMarkerBytes(data, METADATA_MARKER);
+  if (markerStart === -1) return imageBuffer;
+  return imageBuffer.slice(0, markerStart);
 }
 
 // Full certification pipeline
